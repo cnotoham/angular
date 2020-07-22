@@ -1,14 +1,15 @@
 /**
  * @license
- * Copyright Google Inc. All Rights Reserved.
+ * Copyright Google LLC All Rights Reserved.
  *
  * Use of this source code is governed by an MIT-style license that can be
  * found in the LICENSE file at https://angular.io/license
  */
-import {AbsoluteFsPath, absoluteFrom, getFileSystem} from '../../../src/ngtsc/file_system';
+import {absoluteFrom, getFileSystem} from '../../../src/ngtsc/file_system';
 import {runInEachFileSystem} from '../../../src/ngtsc/file_system/testing';
 import {loadTestFiles} from '../../../test/helpers';
-import {hasBeenProcessed, markAsProcessed} from '../../src/packages/build_marker';
+import {cleanPackageJson, hasBeenProcessed, markAsProcessed, needsCleaning, NGCC_VERSION} from '../../src/packages/build_marker';
+import {EntryPointPackageJson} from '../../src/packages/entry_point';
 import {DirectPackageJsonUpdater} from '../../src/writing/package_json_updater';
 
 runInEachFileSystem(() => {
@@ -177,61 +178,126 @@ runInEachFileSystem(() => {
     });
 
     describe('hasBeenProcessed', () => {
-      let entryPointPath: AbsoluteFsPath;
-
-      beforeEach(() => entryPointPath = _('/node_modules/test'));
-
       it('should return true if the marker exists for the given format property', () => {
         expect(hasBeenProcessed(
                    {name: 'test', __processed_by_ivy_ngcc__: {'fesm2015': '0.0.0-PLACEHOLDER'}},
-                   'fesm2015', entryPointPath))
+                   'fesm2015'))
             .toBe(true);
       });
+
       it('should return false if the marker does not exist for the given format property', () => {
         expect(hasBeenProcessed(
                    {name: 'test', __processed_by_ivy_ngcc__: {'fesm2015': '0.0.0-PLACEHOLDER'}},
-                   'module', entryPointPath))
+                   'module'))
             .toBe(false);
       });
-      it('should return false if no markers exist',
-         () => { expect(hasBeenProcessed({name: 'test'}, 'module', entryPointPath)).toBe(false); });
-      it('should throw an Error if the format has been compiled with a different version.', () => {
-        expect(
-            () => hasBeenProcessed(
-                {name: 'test', __processed_by_ivy_ngcc__: {'fesm2015': '8.0.0'}}, 'fesm2015',
-                entryPointPath))
-            .toThrowError(
-                'The ngcc compiler has changed since the last ngcc build.\n' +
-                `Please completely remove the "node_modules" folder containing "${entryPointPath}" and try again.`);
+
+      it('should return false if no markers exist', () => {
+        expect(hasBeenProcessed({name: 'test'}, 'module')).toBe(false);
       });
-      it('should throw an Error if any format has been compiled with a different version.', () => {
-        expect(
-            () => hasBeenProcessed(
-                {name: 'test', __processed_by_ivy_ngcc__: {'fesm2015': '8.0.0'}}, 'module',
-                entryPointPath))
-            .toThrowError(
-                'The ngcc compiler has changed since the last ngcc build.\n' +
-                `Please completely remove the "node_modules" folder containing "${entryPointPath}" and try again.`);
-        expect(
-            () => hasBeenProcessed(
-                {
-                  name: 'test',
-                  __processed_by_ivy_ngcc__: {'module': '0.0.0-PLACEHOLDER', 'fesm2015': '8.0.0'}
-                },
-                'module', entryPointPath))
-            .toThrowError(
-                'The ngcc compiler has changed since the last ngcc build.\n' +
-                `Please completely remove the "node_modules" folder containing "${entryPointPath}" and try again.`);
-        expect(
-            () => hasBeenProcessed(
-                {
-                  name: 'test',
-                  __processed_by_ivy_ngcc__: {'module': '0.0.0-PLACEHOLDER', 'fesm2015': '8.0.0'}
-                },
-                'fesm2015', entryPointPath))
-            .toThrowError(
-                'The ngcc compiler has changed since the last ngcc build.\n' +
-                `Please completely remove the "node_modules" folder containing "${entryPointPath}" and try again.`);
+    });
+
+    describe('needsCleaning()', () => {
+      it('should return true if any format has been compiled with a different version', () => {
+        expect(needsCleaning({
+          name: 'test',
+          __processed_by_ivy_ngcc__: {'fesm2015': '8.0.0', 'esm5': NGCC_VERSION}
+        })).toBe(true);
+      });
+
+      it('should return false if all formats have been compiled with the current version', () => {
+        expect(needsCleaning({name: 'test', __processed_by_ivy_ngcc__: {'fesm2015': NGCC_VERSION}}))
+            .toBe(false);
+      });
+
+      it('should return false if no formats have been compiled', () => {
+        expect(needsCleaning({name: 'test', __processed_by_ivy_ngcc__: {}})).toBe(false);
+        expect(needsCleaning({name: 'test'})).toBe(false);
+      });
+    });
+
+    describe('cleanPackageJson()', () => {
+      it('should not touch the object if there is no build marker', () => {
+        const packageJson: EntryPointPackageJson = {name: 'test-package'};
+        const result = cleanPackageJson(packageJson);
+        expect(result).toBe(false);
+        expect(packageJson).toEqual({name: 'test-package'});
+      });
+
+      it('should remove the processed marker', () => {
+        const packageJson: EntryPointPackageJson = {
+          name: 'test-package',
+          __processed_by_ivy_ngcc__: {'fesm2015': '8.0.0'}
+        };
+        const result = cleanPackageJson(packageJson);
+        expect(result).toBe(true);
+        expect(packageJson).toEqual({name: 'test-package'});
+      });
+
+      it('should remove new entry-point format properties', () => {
+        const packageJson: EntryPointPackageJson = {
+          name: 'test-package',
+          __processed_by_ivy_ngcc__: {'fesm2015': '8.0.0'},
+          fesm2015: 'index.js',
+          fesm2015_ivy_ngcc: '__ivy_ngcc__/index.js'
+        };
+        const result = cleanPackageJson(packageJson);
+        expect(result).toBe(true);
+        expect(packageJson).toEqual({name: 'test-package', fesm2015: 'index.js'});
+      });
+
+      it('should remove the prepublish script if there was a processed marker', () => {
+        const packageJson: EntryPointPackageJson = {
+          name: 'test-package',
+          __processed_by_ivy_ngcc__: {'fesm2015': '8.0.0'},
+          scripts: {prepublishOnly: 'added by ngcc', test: 'do testing'},
+        };
+        const result = cleanPackageJson(packageJson);
+        expect(result).toBe(true);
+        expect(packageJson).toEqual({
+          name: 'test-package',
+          scripts: {test: 'do testing'},
+        });
+      });
+
+      it('should revert and remove the backup for the prepublish script if there was a processed marker',
+         () => {
+           const packageJson: EntryPointPackageJson = {
+             name: 'test-package',
+             __processed_by_ivy_ngcc__: {'fesm2015': '8.0.0'},
+             scripts: {
+               prepublishOnly: 'added by ngcc',
+               prepublishOnly__ivy_ngcc_bak: 'original',
+               test: 'do testing'
+             },
+           };
+           const result = cleanPackageJson(packageJson);
+           expect(result).toBe(true);
+           expect(packageJson).toEqual({
+             name: 'test-package',
+             scripts: {prepublishOnly: 'original', test: 'do testing'},
+           });
+         });
+
+      it('should not touch the scripts if there was no processed marker', () => {
+        const packageJson: EntryPointPackageJson = {
+          name: 'test-package',
+          scripts: {
+            prepublishOnly: 'added by ngcc',
+            prepublishOnly__ivy_ngcc_bak: 'original',
+            test: 'do testing'
+          },
+        };
+        const result = cleanPackageJson(packageJson);
+        expect(result).toBe(false);
+        expect(packageJson).toEqual({
+          name: 'test-package',
+          scripts: {
+            prepublishOnly: 'added by ngcc',
+            prepublishOnly__ivy_ngcc_bak: 'original',
+            test: 'do testing'
+          }
+        });
       });
     });
   });

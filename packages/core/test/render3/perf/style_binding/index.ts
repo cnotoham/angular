@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright Google Inc. All Rights Reserved.
+ * Copyright Google LLC All Rights Reserved.
  *
  * Use of this source code is governed by an MIT-style license that can be
  * found in the LICENSE file at https://angular.io/license
@@ -8,9 +8,9 @@
 import {ɵɵadvance} from '../../../../src/render3/instructions/advance';
 import {ɵɵelement, ɵɵelementEnd, ɵɵelementStart} from '../../../../src/render3/instructions/element';
 import {refreshView} from '../../../../src/render3/instructions/shared';
+import {ɵɵstyleProp} from '../../../../src/render3/instructions/styling';
 import {RenderFlags} from '../../../../src/render3/interfaces/definition';
 import {TVIEW} from '../../../../src/render3/interfaces/view';
-import {ɵɵstyleProp} from '../../../../src/render3/styling_next/instructions';
 import {createBenchmark} from '../micro_bench';
 import {setupRootViewWithEmbeddedViews} from '../setup';
 
@@ -78,7 +78,7 @@ const refreshTime = styleBindingBenchmark('refresh');
 // run change detection in the update mode
 console.profile('style_binding_refresh');
 while (refreshTime()) {
-  refreshView(rootLView, rootTView, null, null);
+  refreshView(rootTView, rootLView, null, null);
 }
 console.profileEnd();
 

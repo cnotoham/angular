@@ -1,12 +1,10 @@
 /**
  * @license
- * Copyright Google Inc. All Rights Reserved.
+ * Copyright Google LLC All Rights Reserved.
  *
  * Use of this source code is governed by an MIT-style license that can be
  * found in the LICENSE file at https://angular.io/license
  */
-
-const PLACEHOLDER_NAME_MARKER = ':';
 
 export interface LocalizeFn {
   (messageParts: TemplateStringsArray, ...expressions: readonly any[]): string;
@@ -22,6 +20,22 @@ export interface LocalizeFn {
    * different translations.
    */
   translate?: TranslateFn;
+  /**
+   * The current locale of the translated messages.
+   *
+   * The compile-time translation inliner is able to replace the following code:
+   *
+   * ```
+   * typeof $localize !== "undefined" && $localize.locale
+   * ```
+   *
+   * with a string literal of the current locale. E.g.
+   *
+   * ```
+   * "fr"
+   * ```
+   */
+  locale?: string;
 }
 
 export interface TranslateFn {
@@ -38,27 +52,65 @@ export interface TranslateFn {
  * $localize `some string to localize`
  * ```
  *
- * **Naming placeholders**
+ * **Providing meaning, description and id**
  *
- * If the template literal string contains expressions then you can optionally name the placeholder
- * associated with each expression. Do this by providing the placeholder name wrapped in `:`
- * characters directly after the expression. These placeholder names are stripped out of the
- * rendered localized string.
- *
- * For example, to name the `item.length` expression placeholder `itemCount` you write:
+ * You can optionally specify one or more of `meaning`, `description` and `id` for a localized
+ * string by pre-pending it with a colon delimited block of the form:
  *
  * ```ts
- * $localize `There are ${item.length}:itemCount: items`;
+ * $localize`:meaning|description@@id:source message text`;
+ *
+ * $localize`:meaning|:source message text`;
+ * $localize`:description:source message text`;
+ * $localize`:@@id:source message text`;
  * ```
  *
- * If you need to use a `:` character directly an expression you must either provide a name or you
- * can escape the `:` by preceding it with a backslash:
+ * This format is the same as that used for `i18n` markers in Angular templates. See the
+ * [Angular 18n guide](guide/i18n#template-translations).
+ *
+ * **Naming placeholders**
+ *
+ * If the template literal string contains expressions, then the expressions will be automatically
+ * associated with placeholder names for you.
  *
  * For example:
  *
  * ```ts
+ * $localize `Hi ${name}! There are ${items.length} items.`;
+ * ```
+ *
+ * will generate a message-source of `Hi {$PH}! There are {$PH_1} items`.
+ *
+ * The recommended practice is to name the placeholder associated with each expression though.
+ *
+ * Do this by providing the placeholder name wrapped in `:` characters directly after the
+ * expression. These placeholder names are stripped out of the rendered localized string.
+ *
+ * For example, to name the `items.length` expression placeholder `itemCount` you write:
+ *
+ * ```ts
+ * $localize `There are ${items.length}:itemCount: items`;
+ * ```
+ *
+ * **Escaping colon markers**
+ *
+ * If you need to use a `:` character directly at the start of a tagged string that has no
+ * metadata block, or directly after a substitution expression that has no name you must escape
+ * the `:` by preceding it with a backslash:
+ *
+ * For example:
+ *
+ * ```ts
+ * // message has a metadata block so no need to escape colon
+ * $localize `:some description::this message starts with a colon (:)`;
+ * // no metadata block so the colon must be escaped
+ * $localize `\:this message starts with a colon (:)`;
+ * ```
+ *
+ * ```ts
+ * // named substitution so no need to escape colon
  * $localize `${label}:label:: ${}`
- * // or
+ * // anonymous substitution so colon must be escaped
  * $localize `${label}\: ${}`
  * ```
  *
@@ -66,19 +118,18 @@ export interface TranslateFn {
  *
  * There are three scenarios:
  *
- * * **compile-time inlining**: the `$localize` tag is transformed at compile time by a transpiler,
- * removing the tag and replacing the template literal string with a translated literal string
- * from a collection of translations provided to the transpilation tool.
+ * * **compile-time inlining**: the `$localize` tag is transformed at compile time by a
+ * transpiler, removing the tag and replacing the template literal string with a translated
+ * literal string from a collection of translations provided to the transpilation tool.
  *
- * * **run-time evaluation**: the `$localize` tag is a run-time function that replaces and reorders
- * the parts (static strings and expressions) of the template literal string with strings from a
- * collection of translations loaded at run-time.
+ * * **run-time evaluation**: the `$localize` tag is a run-time function that replaces and
+ * reorders the parts (static strings and expressions) of the template literal string with strings
+ * from a collection of translations loaded at run-time.
  *
  * * **pass-through evaluation**: the `$localize` tag is a run-time function that simply evaluates
- * the original template literal string without applying any translations to the parts. This version
- * is used during development or where there is no need to translate the localized template
- * literals.
- *
+ * the original template literal string without applying any translations to the parts. This
+ * version is used during development or where there is no need to translate the localized
+ * template literals.
  * @param messageParts a collection of the static parts of the template string.
  * @param expressions a collection of the values of each placeholder in the template string.
  * @returns the translated string, with the `messageParts` and `expressions` interleaved together.
@@ -91,37 +142,56 @@ export const $localize: LocalizeFn = function(
     messageParts = translation[0];
     expressions = translation[1];
   }
-  let message = messageParts[0];
+  let message = stripBlock(messageParts[0], messageParts.raw[0]);
   for (let i = 1; i < messageParts.length; i++) {
-    message += expressions[i - 1] + stripPlaceholderName(messageParts[i], messageParts.raw[i]);
+    message += expressions[i - 1] + stripBlock(messageParts[i], messageParts.raw[i]);
   }
   return message;
 };
 
+const BLOCK_MARKER = ':';
+
 /**
- * Strip the placeholder name from the start of the `messagePart`, if it is found.
+ * Strip a delimited "block" from the start of the `messagePart`, if it is found.
  *
- * Placeholder marker characters (:) may appear after a substitution that does not provide an
- * explicit placeholder name. In this case the character must be escaped with a backslash, `\:`.
- * We can check for this by looking at the `raw` messagePart, which should still contain the
- * backslash.
- *
- * If the template literal was synthesized then its raw array will only contain empty strings.
- * This is because TS needs the original source code to find the raw text and in the case of
- * synthesize AST nodes, there is no source code.
- *
- * The workaround is to assume that the template literal did not contain an escaped placeholder
- * name, and fall back on checking the cooked array instead.
- *
- * This should be OK because synthesized nodes (from the Angular template compiler) will always
- * provide explicit placeholder names and so will never need to escape placeholder name markers.
+ * If a marker character (:) actually appears in the content at the start of a tagged string or
+ * after a substitution expression, where a block has not been provided the character must be
+ * escaped with a backslash, `\:`. This function checks for this by looking at the `raw`
+ * messagePart, which should still contain the backslash.
  *
  * @param messagePart The cooked message part to process.
  * @param rawMessagePart The raw message part to check.
  * @returns the message part with the placeholder name stripped, if found.
+ * @throws an error if the block is unterminated
  */
-function stripPlaceholderName(messagePart: string, rawMessagePart: string) {
-  return (rawMessagePart || messagePart).charAt(0) === PLACEHOLDER_NAME_MARKER ?
-      messagePart.substring(messagePart.indexOf(PLACEHOLDER_NAME_MARKER, 1) + 1) :
+function stripBlock(messagePart: string, rawMessagePart: string) {
+  return rawMessagePart.charAt(0) === BLOCK_MARKER ?
+      messagePart.substring(findEndOfBlock(messagePart, rawMessagePart) + 1) :
       messagePart;
+}
+
+/**
+ * Find the end of a "marked block" indicated by the first non-escaped colon.
+ *
+ * @param cooked The cooked string (where escaped chars have been processed)
+ * @param raw The raw string (where escape sequences are still in place)
+ *
+ * @returns the index of the end of block marker
+ * @throws an error if the block is unterminated
+ */
+function findEndOfBlock(cooked: string, raw: string): number {
+  /***********************************************************************************************
+   * This function is repeated in `src/utils/messages.ts` and the two should be kept in sync.
+   * The reason is that this file is marked as having side-effects, and if we import `messages.ts`
+   * into it, the whole of `src/utils` will be included in this bundle and none of the functions
+   * will be tree shaken.
+   ***********************************************************************************************/
+  for (let cookedIndex = 1, rawIndex = 1; cookedIndex < cooked.length; cookedIndex++, rawIndex++) {
+    if (raw[rawIndex] === '\\') {
+      rawIndex++;
+    } else if (cooked[cookedIndex] === BLOCK_MARKER) {
+      return cookedIndex;
+    }
+  }
+  throw new Error(`Unterminated $localize metadata block in "${raw}".`);
 }

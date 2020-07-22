@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright Google Inc. All Rights Reserved.
+ * Copyright Google LLC All Rights Reserved.
  *
  * Use of this source code is governed by an MIT-style license that can be
  * found in the LICENSE file at https://angular.io/license
@@ -24,7 +24,7 @@ Zone.__load_patch('EventEmitter', (global: any) => {
 
   const eventNameToString = function(eventName: string|Symbol) {
     if (typeof eventName === 'string') {
-      return eventName as string;
+      return eventName;
     }
     if (!eventName) {
       return '';

@@ -1,17 +1,18 @@
 /**
  * @license
- * Copyright Google Inc. All Rights Reserved.
+ * Copyright Google LLC All Rights Reserved.
  *
  * Use of this source code is governed by an MIT-style license that can be
  * found in the LICENSE file at https://angular.io/license
  */
 
-import {Rule, SchematicContext, SchematicsException, Tree} from '@angular-devkit/schematics';
-import {dirname, relative} from 'path';
+import {Rule, SchematicsException, Tree} from '@angular-devkit/schematics';
+import {relative} from 'path';
 import * as ts from 'typescript';
 
 import {getProjectTsConfigPaths} from '../../utils/project_tsconfig_paths';
-import {parseTsconfigFile} from '../../utils/typescript/parse_tsconfig';
+import {createMigrationProgram} from '../../utils/typescript/compiler_host';
+
 import {identifyDynamicQueryNodes, removeOptionsParameter, removeStaticFlag} from './util';
 
 
@@ -19,12 +20,10 @@ import {identifyDynamicQueryNodes, removeOptionsParameter, removeStaticFlag} fro
  * Runs the dynamic queries migration for all TypeScript projects in the current CLI workspace.
  */
 export default function(): Rule {
-  return (tree: Tree, ctx: SchematicContext) => {
+  return (tree: Tree) => {
     const {buildPaths, testPaths} = getProjectTsConfigPaths(tree);
     const basePath = process.cwd();
     const allPaths = [...buildPaths, ...testPaths];
-
-    ctx.logger.info('------ Dynamic queries migration ------');
 
     if (!allPaths.length) {
       throw new SchematicsException(
@@ -38,22 +37,7 @@ export default function(): Rule {
 }
 
 function runDynamicQueryMigration(tree: Tree, tsconfigPath: string, basePath: string) {
-  const parsed = parseTsconfigFile(tsconfigPath, dirname(tsconfigPath));
-  const host = ts.createCompilerHost(parsed.options, true);
-
-  // We need to overwrite the host "readFile" method, as we want the TypeScript
-  // program to be based on the file contents in the virtual file tree. Otherwise
-  // if we run the migration for multiple tsconfig files which have intersecting
-  // source files, it can end up updating query definitions multiple times.
-  host.readFile = fileName => {
-    const buffer = tree.read(relative(basePath, fileName));
-    // Strip BOM as otherwise TSC methods (Ex: getWidth) will return an offset which
-    // which breaks the CLI UpdateRecorder.
-    // See: https://github.com/angular/angular/pull/30719
-    return buffer ? buffer.toString().replace(/^\uFEFF/, '') : undefined;
-  };
-
-  const program = ts.createProgram(parsed.fileNames, parsed.options, host);
+  const {program} = createMigrationProgram(tree, tsconfigPath, basePath);
   const typeChecker = program.getTypeChecker();
   const sourceFiles = program.getSourceFiles().filter(
       f => !f.isDeclarationFile && !program.isSourceFileFromExternalLibrary(f));
